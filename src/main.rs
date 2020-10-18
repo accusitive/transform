@@ -1,65 +1,66 @@
-
 #[derive(Debug)]
-enum Branch {
-    Add(Box<Branch>, Box<Branch>),
-    Const(i32)
+enum Branch<'br> {
+    Add(Box<Branch<'br>>, Box<Branch<'br>>),
+    Function {
+        name: &'br str,
+        params: Vec<&'br str>,
+        body: Vec<Branch<'br>>,
+    },
+    Const(i32),
+    Variable(&'br str), // Name
+    Assignment(&'br str, Box<Branch<'br>>),
+    LambdaFunction {
+        params: Vec<&'br str>,
+        body: Vec<Branch<'br>>,
+    },
 }
-impl<'a> Branch {
+impl<'a> Branch<'a> {
     pub fn to_js(&self) -> String {
         match self {
-            Branch::Add(lhs , rhs) => {
-                return format!("{} + {}", lhs.to_js(), rhs.to_js())
+            Branch::Add(lhs, rhs) => return format!("{} + {}", lhs.to_js(), rhs.to_js()),
+            Branch::Const(c) => return c.to_string(),
+            Branch::Function { name, params, body } => {
+                let js_body = body
+                    .iter()
+                    .map(|b| b.to_js())
+                    .collect::<Vec<String>>()
+                    .join("\n\tasd");
+                let js_args = params.join(", ");
+                format!(
+                    "function {name}({js_args}){{\n\t{js_body}\n}}",
+                    name = name,
+                    js_args = js_args,
+                    js_body = js_body
+                )
             }
-            Branch::Const(c) => {
-                return c.to_string()
+            Branch::Variable(v) => format!("{}", v),
+            Branch::Assignment(left, right) => format!("var {} = {}", left, right.to_js()),
+            Branch::LambdaFunction { params, body } => {
+                let js_body = body
+                    .iter()
+                    .map(|b| b.to_js())
+                    .collect::<Vec<String>>()
+                    .join("\n\tasd");
+                let js_args = params.join(", ");
+                format!("({}) => {{{}}}", js_args, js_body)
             }
         }
     }
 }
 #[derive(Debug)]
-struct Tree {
-    branches: Vec<Branch>,
+struct Tree<'tr> {
+    branches: Vec<Branch<'tr>>,
 }
-impl<'a> Tree {
-    pub fn to_js(&mut self) -> String{
-        let compiled_branches = self.branches.iter().map(|b: &Branch|b.to_js()).collect::<Vec<String>>();
+impl<'a> Tree<'a> {
+    pub fn to_js(&mut self) -> String {
+        let compiled_branches = self
+            .branches
+            .iter()
+            .map(|b: &Branch| b.to_js())
+            .collect::<Vec<String>>();
 
         compiled_branches.join(";\n")
     }
-}
-fn increment_branch(b: &mut Branch) -> Branch{
-    let r = match b{
-
-        Branch::Add(lhs, rhs) => {
-            let l = Branch::Add(Box::new(increment_branch(lhs)), Box::new(Branch::Const(1)));
-            let r = Branch::Add(Box::new(increment_branch(rhs)), Box::new(Branch::Const(1)));
-
-            Branch::Add(Box::new(l),Box::new(r))
-        }
-        Branch::Const(i) => {
-            //println!("returning a const + 1");
-            Branch::Const(*i+1)
-        }
-    };
-    r
-}
-fn increment_consts(t: &mut Tree) {
-    for branch in &mut t.branches {
-        let b = increment_branch(branch);
-        *branch = b;
-    }
-}
-fn add(lhs: i32, rhs: i32) -> Branch{
-    Branch::Add(
-        Box::new(Branch::Const(lhs)),
-        Box::new(Branch::Const(rhs)),
-    )
-}
-fn addb(lhs: Branch, rhs: Branch) -> Branch{
-    Branch::Add(
-        Box::new(lhs),
-        Box::new(rhs),
-    )
 }
 /*
 
@@ -69,12 +70,42 @@ function add(a, b) {
 
 */
 fn main() {
-    let mut tree = Tree {
-        branches: {
-            vec![
-                add(20, 60),
-            ]
-        },
-    };
-     println!("//rendered tree = \nconst a = {}\nconsole.log(a)", tree.to_js());
+    let mut branches = vec![];
+    {
+        let adder = Branch::Function {
+            name: "add",
+            body: vec![Branch::Add(
+                Box::new(Branch::Variable("lhs")),
+                Box::new(Branch::Variable("rhs")),
+            )],
+            params: vec!["lhs", "rhs"],
+        };
+        branches.push(adder);
+    }
+    {
+        let adder2 = Branch::Function {
+            name: "add2",
+            body: vec![Branch::Add(
+                Box::new(Branch::Variable("lhs")),
+                Box::new(Branch::Variable("rhs")),
+            )],
+            params: vec!["lhs", "rhs"],
+        };
+        let x = Branch::Assignment("x", Box::new(adder2));
+
+        branches.push(x)
+    }
+    {
+        let lambda_body = vec![
+            Branch::Add(Box::new(Branch::Variable("a")), Box::new(Branch::Add(Box::new(Branch::Variable("b")), Box::new(Branch::Variable("c")))))
+        ];
+        let lambda = Branch::LambdaFunction{
+            body: lambda_body,
+            params: vec!["a", "b", "c"]
+        };
+        let lambda_owner = Branch::Assignment("lambda_owner", Box::new(lambda));
+        branches.push(lambda_owner);
+    }
+    let mut tree = Tree { branches: branches };
+    println!("//rendered tree = \n{}", tree.to_js());
 }
