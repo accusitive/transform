@@ -73,18 +73,18 @@ impl<'a> Branch<'a> {
         }
     }
 }
-fn walk_branch<'a>(br: &'a Branch, f: fn()) -> Branch<'a> {
+fn flatten_lambda<'a>(br: &'a Branch) -> Branch<'a> {
     println!("walk branch called {:?}", br);
     return match br {
         Branch::Add(l, r) => {
-            let lh = walk_branch(&*l, f);
-            let rh = walk_branch(&*r, f);
+            let lh = flatten_lambda(&*l);
+            let rh = flatten_lambda(&*r);
             Branch::Add(Box::new(lh), Box::new(rh))
         }
         Branch::Function { name, params, body } => {
             let v = body
                 .iter()
-                .map(|b| walk_branch(b, f))
+                .map(|b| flatten_lambda(b))
                 .collect::<Vec<Branch>>();
             Branch::Function {
                 name: name,
@@ -96,13 +96,13 @@ fn walk_branch<'a>(br: &'a Branch, f: fn()) -> Branch<'a> {
         Branch::Const(c) => Branch::Const(*c),
         Branch::Variable(v) => Branch::Variable(v),
         Branch::Assignment(l, r) => {
-            let a = walk_branch(r, f);
+            let a = flatten_lambda(r);
             Branch::Assignment(l, Box::new(a))
         }
         Branch::LambdaFunction { params, body } => {
             let v = body
                 .iter()
-                .map(|b| walk_branch(b, f))
+                .map(|b| flatten_lambda(b))
                 .collect::<Vec<Branch>>();
             let lambda_to_bool = true;
             if lambda_to_bool {
@@ -120,14 +120,14 @@ fn walk_branch<'a>(br: &'a Branch, f: fn()) -> Branch<'a> {
         Branch::Block(body) => {
             let v = body
                 .iter()
-                .map(|b| walk_branch(b, f))
+                .map(|b| flatten_lambda(b))
                 .collect::<Vec<Branch>>();
             Branch::Block(v)
         }
         Branch::BlockFunction { body, params } => {
             let v = body
                 .iter()
-                .map(|b| walk_branch(b, f))
+                .map(|b| flatten_lambda(b))
                 .collect::<Vec<Branch>>();
             Branch::BlockFunction {
                 body: v,
@@ -135,7 +135,7 @@ fn walk_branch<'a>(br: &'a Branch, f: fn()) -> Branch<'a> {
             }
         }
         Branch::Return(b) => {
-            let r = walk_branch(b, f);
+            let r = flatten_lambda(b);
             Branch::Return(Box::new(r))
         }
     };
@@ -154,7 +154,6 @@ impl<'a> Tree<'a> {
 
         compiled_branches.join(";\n")
     }
-
 }
 
 fn main() {
@@ -223,17 +222,15 @@ fn main() {
     let b = if no_lambdas {
         branches
             .iter()
-            .map(|b| walk_branch(b, || {}))
+            .map(|b| flatten_lambda(b))
             .collect::<Vec<Branch>>()
     } else {
         branches
     };
 
-    let mut tree = Tree {
-        branches: b,
-    };
+    let mut tree = Tree { branches: b };
     // for branch in &tree.branches {
-    //     let walked = walk_branch(branch, || {});
+    //     let walked = flatten_lambda(branch, || {});
     //     println!("walked = {:?}", walked);
     // }
 
@@ -253,9 +250,9 @@ fn test_assignment() {
 #[test]
 fn test_lambda() {
     let mut tree = Tree {
-        branches: vec![Branch::LambdaFunction{
+        branches: vec![Branch::LambdaFunction {
             body: vec![],
-            params: vec![]
+            params: vec![],
         }],
     };
     assert_eq!(tree.to_js(), "() => {\n\t\n\n}")
@@ -263,13 +260,24 @@ fn test_lambda() {
 
 #[test]
 fn test_lambda_flatten_pass() {
-    let lam = Branch::LambdaFunction{
+    let lam = Branch::LambdaFunction {
         body: vec![],
-        params: vec![]
+        params: vec![],
     };
-    let no_lambda = walk_branch(&lam, ||{});
+    let no_lambda = flatten_lambda(&lam);
     let mut tree = Tree {
         branches: vec![no_lambda],
     };
     assert_eq!(tree.to_js(), "(function (){\n\t\n})")
+}
+#[test]
+fn test_block() {
+    let blk = Branch::Block(vec![Branch::Return(Box::new(Branch::Add(
+        Box::new(Branch::Const(22)),
+        Box::new(Branch::Const(654)),
+    )))]);
+    let mut tree = Tree {
+        branches: vec![blk],
+    };
+    assert_eq!(tree.to_js(), "(function (){\n\treturn 22 + 654\n\n})()");
 }
