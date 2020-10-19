@@ -257,3 +257,43 @@ fn main() {
 
     test_js(tree.to_js());
 }
+
+#[test]
+fn test_assignment() {
+    let mut tree = Tree {
+        branches: vec![Branch::Assignment("left", Box::new(Branch::Const(6)))],
+        flatten_lambdas: false,
+    };
+    assert_eq!(tree.to_js(), "var left = 6")
+}
+
+#[test]
+fn test_lambda() {
+    let mut tree = Tree {
+        branches: vec![Branch::LambdaFunction{
+            body: vec![],
+            params: vec![]
+        }],
+        flatten_lambdas: false,
+    };
+    assert_eq!(tree.to_js(), "() => {\n\t\n\n}")
+}
+
+#[test]
+fn test_lambda_flatten_pass() {
+    let lam = Branch::LambdaFunction{
+        body: vec![],
+        params: vec![]
+    };
+    let no_lambda = walk_branch(&lam, ||{});
+    
+            // .iter()
+            // .map(|b| walk_branch(b, || {}))
+            // .collect::<Vec<Branch>>();
+
+    let mut tree = Tree {
+        branches: vec![no_lambda],
+        flatten_lambdas: false,
+    };
+    assert_eq!(tree.to_js(), "() => {\n\t\n\n}")
+}
