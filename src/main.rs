@@ -236,13 +236,13 @@ fn main() {
     let no_lambdas = true;
 
     let b = if no_lambdas {
-        branches.iter()
-        .map(|b| walk_branch(b, || {}))
-        .collect::<Vec<Branch>>()
+        branches
+            .iter()
+            .map(|b| walk_branch(b, || {}))
+            .collect::<Vec<Branch>>()
     } else {
         branches
     };
-        
 
     let mut tree = Tree {
         branches: b,
