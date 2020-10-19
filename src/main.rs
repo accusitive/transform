@@ -143,7 +143,6 @@ fn walk_branch<'a>(br: &'a Branch, f: fn()) -> Branch<'a> {
 #[derive(Debug)]
 struct Tree<'tr> {
     branches: Vec<Branch<'tr>>,
-    flatten_lambdas: bool,
 }
 impl<'a> Tree<'a> {
     pub fn to_js(&mut self) -> String {
@@ -155,21 +154,7 @@ impl<'a> Tree<'a> {
 
         compiled_branches.join(";\n")
     }
-    pub fn lambda(&mut self, body: Vec<Branch<'a>>, params: Vec<&'a str>) -> Branch<'a> {
-        if self.flatten_lambdas {
-            let b = Branch::BlockFunction {
-                body: body,
-                params: params,
-            };
-            return b;
-        } else {
-            let b = Branch::LambdaFunction {
-                body: body,
-                params: params,
-            };
-            return b;
-        }
-    }
+
 }
 
 fn main() {
@@ -246,7 +231,6 @@ fn main() {
 
     let mut tree = Tree {
         branches: b,
-        flatten_lambdas: false,
     };
     // for branch in &tree.branches {
     //     let walked = walk_branch(branch, || {});
@@ -262,7 +246,6 @@ fn main() {
 fn test_assignment() {
     let mut tree = Tree {
         branches: vec![Branch::Assignment("left", Box::new(Branch::Const(6)))],
-        flatten_lambdas: false,
     };
     assert_eq!(tree.to_js(), "var left = 6")
 }
@@ -274,7 +257,6 @@ fn test_lambda() {
             body: vec![],
             params: vec![]
         }],
-        flatten_lambdas: false,
     };
     assert_eq!(tree.to_js(), "() => {\n\t\n\n}")
 }
@@ -286,14 +268,8 @@ fn test_lambda_flatten_pass() {
         params: vec![]
     };
     let no_lambda = walk_branch(&lam, ||{});
-    
-            // .iter()
-            // .map(|b| walk_branch(b, || {}))
-            // .collect::<Vec<Branch>>();
-
     let mut tree = Tree {
         branches: vec![no_lambda],
-        flatten_lambdas: false,
     };
-    assert_eq!(tree.to_js(), "() => {\n\t\n\n}")
+    assert_eq!(tree.to_js(), "(function (){\n\t\n})")
 }
