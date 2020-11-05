@@ -1,9 +1,46 @@
 mod test_with_v8;
 use crate::test_with_v8::test_js;
+#[allow(dead_code)]
+#[derive(Debug, Copy, Clone)]
+enum Op {
+    Add,
+    Sub,
+    Div,
+    Mul,
+    Lt,
+    Gt,
+    Gte,
+    Lte,
+    Ne,
+    Eq,
+    Set,
+}
+impl Op {
+    fn to_js(self) -> String {
+        match self {
+            Op::Add => "+",
+            Op::Sub => "-",
+            Op::Div => "/",
+            Op::Mul => "*",
+            Op::Lt => "<",
+            Op::Gt => ">",
+            Op::Gte => ">=",
+            Op::Lte => "<=",
+            Op::Ne => "!=",
+            Op::Eq => "==",
+            Op::Set => "=",
+        }
+        .to_string()
+    }
+}
 //TODO: validation
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 enum Branch<'br> {
-    Add(Box<Branch<'br>>, Box<Branch<'br>>),
+    BinaryOp(Op, Box<Branch<'br>>, Box<Branch<'br>>),
+    // Add(Box<Branch<'br>>, Box<Branch<'br>>),
+    // ShiftRight(Box<Branch<'br>>, Box<Branch<'br>>),
+    // Divide(Box<Branch<'br>>, Box<Branch<'br>>),
     Function {
         name: &'br str,
         params: Vec<&'br str>,
@@ -17,11 +54,20 @@ enum Branch<'br> {
         body: Vec<Branch<'br>>,
     },
     Block(Vec<Branch<'br>>),
+    ExpressionBlock(Vec<Branch<'br>>),
+
     BlockFunction {
         body: Vec<Branch<'br>>,
         params: Vec<&'br str>,
     },
     Return(Box<Branch<'br>>),
+    CForLoop {
+        init: Box<Branch<'br>>,
+        check: Box<Branch<'br>>,
+        action: Box<Branch<'br>>,
+        inner: Box<Branch<'br>>,
+    }, // for(init; check; action){inner},
+    ConsoleLog(Box<Branch<'br>>),
 }
 macro_rules! render_body {
     ($body: ident) => {
@@ -37,7 +83,7 @@ macro_rules! render_body {
 impl<'a> Branch<'a> {
     pub fn to_js(&self) -> String {
         match self {
-            Branch::Add(lhs, rhs) => return format!("{} + {}", lhs.to_js(), rhs.to_js()),
+            // Branch::Add(lhs, rhs) => return format!("{} + {}", lhs.to_js(), rhs.to_js()),
             Branch::Const(c) => return c.to_string(),
             Branch::Function { name, params, body } => {
                 let js_body = render_body!(body);
@@ -70,16 +116,36 @@ impl<'a> Branch<'a> {
                 format!("(function ({}){{\n{}}})", js_args, js_body)
             }
             Branch::Return(v) => format!("return {}", v.to_js()),
+            Branch::CForLoop {
+                init,
+                check,
+                action,
+                inner,
+            } => format!(
+                "for({}; {}; {}){{ {} }}",
+                init.to_js(),
+                check.to_js(),
+                action.to_js(),
+                inner.to_js()
+            ),
+            Branch::BinaryOp(op, lhs, rhs) => {
+                format!("{} {} {}", lhs.to_js(), op.to_js(), rhs.to_js())
+            }
+            Branch::ExpressionBlock(body) => {
+                let js_body = render_body!(body);
+
+                format!("{}", js_body)
+            }
+            Branch::ConsoleLog(c) => format!("console.log({})", c.to_js()),
         }
     }
 }
 fn flatten_lambda<'a>(br: &'a Branch) -> Branch<'a> {
-    println!("walk branch called {:?}", br);
     return match br {
-        Branch::Add(l, r) => {
+        Branch::BinaryOp(op, l, r) => {
             let lh = flatten_lambda(&*l);
             let rh = flatten_lambda(&*r);
-            Branch::Add(Box::new(lh), Box::new(rh))
+            Branch::BinaryOp(op.to_owned(), Box::new(lh), Box::new(rh))
         }
         Branch::Function { name, params, body } => {
             let v = body
@@ -88,10 +154,9 @@ fn flatten_lambda<'a>(br: &'a Branch) -> Branch<'a> {
                 .collect::<Vec<Branch>>();
             Branch::Function {
                 name: name,
-                params: params.to_vec(), // TODO: Remove to_vec(), its ugly
+                params: params.to_vec(),
                 body: v,
             }
-            // body.push(Branch::Block(vec![]));
         }
         Branch::Const(c) => Branch::Const(*c),
         Branch::Variable(v) => Branch::Variable(v),
@@ -138,8 +203,115 @@ fn flatten_lambda<'a>(br: &'a Branch) -> Branch<'a> {
             let r = flatten_lambda(b);
             Branch::Return(Box::new(r))
         }
+
+        Branch::CForLoop {
+            init,
+            check,
+            action,
+            inner,
+        } => Branch::CForLoop {
+            init: Box::new(flatten_lambda(&*init)),
+            check: Box::new(flatten_lambda(&*check)),
+            action: Box::new(flatten_lambda(&*action)),
+            inner: Box::new(flatten_lambda(&*inner)),
+        },
+        Branch::ExpressionBlock(body) => {
+            let v = body
+                .iter()
+                .map(|b| flatten_lambda(b))
+                .collect::<Vec<Branch>>();
+            Branch::ExpressionBlock(v)
+        }
+        Branch::ConsoleLog(c) => Branch::ConsoleLog(Box::new(flatten_lambda(c))),
     };
 }
+
+fn unroll_loops<'a>(br: &'a Branch) -> Branch<'a> {
+    return match br {
+        Branch::BinaryOp(op, l, r) => {
+            let lh = flatten_lambda(&*l);
+            let rh = flatten_lambda(&*r);
+            Branch::BinaryOp(op.to_owned(), Box::new(lh), Box::new(rh))
+        }
+        Branch::Function { name, params, body } => {
+            let v = body
+                .iter()
+                .map(|b| unroll_loops(b))
+                .collect::<Vec<Branch>>();
+            Branch::Function {
+                name: name,
+                params: params.to_vec(),
+                body: v,
+            }
+        }
+        Branch::Const(c) => Branch::Const(*c),
+        Branch::Variable(v) => Branch::Variable(v),
+        Branch::Assignment(l, r) => {
+            let a = unroll_loops(r);
+            Branch::Assignment(l, Box::new(a))
+        }
+        Branch::LambdaFunction { params, body } => {
+            let v = body
+                .iter()
+                .map(|b| unroll_loops(b))
+                .collect::<Vec<Branch>>();
+            let lambda_to_bool = true;
+            if lambda_to_bool {
+                Branch::BlockFunction {
+                    body: v,
+                    params: params.to_vec(),
+                }
+            } else {
+                Branch::LambdaFunction {
+                    body: v,
+                    params: params.to_vec(),
+                }
+            }
+        }
+        Branch::Block(body) => {
+            let v = body
+                .iter()
+                .map(|b| unroll_loops(b))
+                .collect::<Vec<Branch>>();
+            Branch::Block(v)
+        }
+        Branch::BlockFunction { body, params } => {
+            let v = body
+                .iter()
+                .map(|b| unroll_loops(b))
+                .collect::<Vec<Branch>>();
+            Branch::BlockFunction {
+                body: v,
+                params: params.to_vec(),
+            }
+        }
+        Branch::Return(b) => {
+            let r = unroll_loops(b);
+            Branch::Return(Box::new(r))
+        }
+
+        Branch::CForLoop {
+            init,
+            check,
+            action,
+            inner,
+        } => Branch::CForLoop {
+            init: Box::new(unroll_loops(&*init)),
+            check: Box::new(unroll_loops(&*check)),
+            action: Box::new(unroll_loops(&*action)),
+            inner: Box::new(unroll_loops(&*inner)),
+        },
+        Branch::ExpressionBlock(body) => {
+            let v = body
+                .iter()
+                .map(|b| flatten_lambda(b))
+                .collect::<Vec<Branch>>();
+            Branch::ExpressionBlock(v)
+        }
+        Branch::ConsoleLog(c) => Branch::ConsoleLog(Box::new(flatten_lambda(c))),
+    };
+}
+
 #[derive(Debug)]
 struct Tree<'tr> {
     branches: Vec<Branch<'tr>>,
@@ -158,81 +330,38 @@ impl<'a> Tree<'a> {
 
 fn main() {
     let mut branches = vec![];
-    // {
-    //     let adder = Branch::Function {
-    //         name: "add",
-    //         body: vec![Branch::Return(Box::new(Branch::Add(
-    //             Box::new(Branch::Variable("lhs")),
-    //             Box::new(Branch::Variable("rhs")),
-    //         )))],
-    //         params: vec!["lhs", "rhs"],
-    //     };
-    //     branches.push(adder);
-    // }
-    // {
-    //     let adder2 = Branch::Function {
-    //         name: "add2",
-    //         body: vec![Branch::Return(Box::new(Branch::Add(
-    //             Box::new(Branch::Variable("lhs")),
-    //             Box::new(Branch::Variable("rhs")),
-    //         )))],
-    //         params: vec!["lhs", "rhs"],
-    //     };
-    //     let x = Branch::Assignment("x", Box::new(adder2));
-
-    //     branches.push(x)
-    // }
-    // {
-    //     let lambda_body = vec![Branch::Return(Box::new(Branch::Add(
-    //         Box::new(Branch::Variable("a")),
-    //         Box::new(Branch::Add(
-    //             Box::new(Branch::Variable("b")),
-    //             Box::new(Branch::Variable("c")),
-    //         )),
-    //     )))];
-
-    //     let lambda = tree.lambda(lambda_body, vec!["a", "b", "c"]);
-
-    //     let lambda_owner = Branch::Assignment("lambda_owner", Box::new(lambda));
-    //     branches.push(lambda_owner);
-    // }
-    // {
-    //     let mut body = vec![
-    //         Branch::Assignment("temp", Box::new(Branch::Const(42))),
-    //         Branch::Return(Box::new(Branch::Variable("temp"))),
-    //     ];
-    //     let t = Branch::Assignment("temp", Box::new(Branch::Block(body)));
-    //     // branches.push(t.clone());
-    //     // branches.push(t.clone());
-    //     // branches.push(t.clone());
-    //     // branches.push(t.clone());
-    //     // branches.push(t.clone())
-    // }
-    // tree.branches.append(&mut branches);
-
-    branches.push(Branch::LambdaFunction {
-        params: vec!["a", "b"],
-        body: vec![Branch::Add(
-            Box::new(Branch::Variable("a")),
-            Box::new(Branch::Variable("b")),
-        )],
-    });
-    let no_lambdas = true;
-
-    let b = if no_lambdas {
-        branches
-            .iter()
-            .map(|b| flatten_lambda(b))
-            .collect::<Vec<Branch>>()
-    } else {
-        branches
+    let increment_i = {
+        let i_ref = Branch::Variable("i");
+        let i_ref_plus_one = Branch::BinaryOp(Op::Add, Box::new(i_ref), Box::new(Branch::Const(1)));
+        let i_ref = Branch::Variable("i");
+        Branch::BinaryOp(Op::Set, Box::new(i_ref), Box::new(i_ref_plus_one))
     };
 
+    let blk = Branch::Block(vec![
+ 
+        Branch::CForLoop {
+            init: Box::new(Branch::ExpressionBlock(vec![Branch::Assignment(
+                "i",
+                Box::new(Branch::Const(0)),
+            )])),
+            check: Box::new(Branch::ExpressionBlock(vec![Branch::BinaryOp(
+                Op::Lte,
+                Box::new(Branch::Variable("i")),
+                Box::new(Branch::Const(100)),
+            )])),
+            action: Box::new(Branch::Block(vec![increment_i])),
+            inner: Box::new(Branch::ConsoleLog(Box::new(Branch::Variable("i")))),
+        },
+    ]);
+    branches.push(blk);
+
+    let b = branches
+        .iter()
+        .map(|b| flatten_lambda(b))
+        .collect::<Vec<Branch>>();
+    let b = b.iter().map(|b| unroll_loops(b)).collect::<Vec<Branch>>();
+
     let mut tree = Tree { branches: b };
-    // for branch in &tree.branches {
-    //     let walked = flatten_lambda(branch, || {});
-    //     println!("walked = {:?}", walked);
-    // }
 
     println!("//rendered tree = \n{}", tree.to_js());
 
@@ -268,6 +397,7 @@ fn test_lambda_flatten_pass() {
     let mut tree = Tree {
         branches: vec![no_lambda],
     };
+    // assert_eq!()
     assert_eq!(tree.to_js(), "(function (){\n\t\n})")
 }
 #[test]
@@ -276,6 +406,7 @@ fn test_block() {
         Box::new(Branch::Const(22)),
         Box::new(Branch::Const(654)),
     )))]);
+
     let mut tree = Tree {
         branches: vec![blk],
     };
